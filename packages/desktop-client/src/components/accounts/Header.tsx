@@ -68,6 +68,7 @@ type AccountHeaderProps = {
   accounts: AccountEntity[];
   transactions: TransactionEntity[];
   showBalances: boolean;
+  showUpcoming: boolean;
   showExtraBalances: boolean;
   showCleared: boolean;
   showReconciled: boolean;
@@ -144,6 +145,7 @@ export function AccountHeader({
   accounts,
   transactions,
   showBalances,
+  showUpcoming,
   showExtraBalances,
   showCleared,
   showReconciled,
@@ -510,6 +512,7 @@ export function AccountHeader({
                       }
                       isSorted={isSorted}
                       showBalances={showBalances}
+                      showUpcoming={showUpcoming}
                       showCleared={showCleared}
                       showReconciled={showReconciled}
                       onMenuSelect={onMenuSelect}
@@ -732,6 +735,7 @@ type AccountMenuProps = {
   canSync: boolean;
   showNetWorthChart: boolean;
   showBalances: boolean;
+  showUpcoming: boolean;
   canShowBalances: boolean;
   showCleared: boolean;
   showReconciled: boolean;
@@ -744,6 +748,7 @@ type AccountMenuProps = {
       | 'reopen'
       | 'export'
       | 'toggle-balance'
+      | 'toggle-upcoming'
       | 'remove-sorting'
       | 'toggle-cleared'
       | 'toggle-reconciled'
@@ -756,6 +761,7 @@ function AccountMenu({
   canSync,
   showNetWorthChart,
   showBalances,
+  showUpcoming,
   canShowBalances,
   showCleared,
   showReconciled,
@@ -790,6 +796,12 @@ function AccountMenu({
               } as const,
             ]
           : []),
+        {
+          name: 'toggle-upcoming',
+          text: showUpcoming
+            ? t('Hide upcoming transactions')
+            : t('Show upcoming transactions'),
+        } as const,
         {
           name: 'toggle-net-worth-chart',
           text: showNetWorthChart

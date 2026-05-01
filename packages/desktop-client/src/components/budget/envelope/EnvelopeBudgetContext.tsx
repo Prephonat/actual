@@ -14,6 +14,10 @@ import type { TransactionEntity } from '@actual-app/core/types/models';
 import { useCategoriesById } from '#hooks/useCategories';
 import { useForecastScheduledTransactions } from '#hooks/useForecastScheduledTransactions';
 
+// Persists the last sent forecast map across component unmount/remount so the
+// clearing loop can still zero out stale spreadsheet cells after a skip-next-date.
+let _persistedForecastMap: Map<string, TransactionEntity[]> = new Map();
+
 type EnvelopeBudgetContextDefinition = {
   summaryCollapsed: boolean;
   onBudgetAction: (month: string, action: string, arg?: unknown) => void;
@@ -62,12 +66,15 @@ export function EnvelopeBudgetProvider({
   const { data: categoriesData } = useCategoriesById();
   const categoriesById = categoriesData?.list;
 
-  const prevMapRef = useRef<Map<string, TransactionEntity[]>>(new Map());
+  const prevMapRef = useRef<Map<string, TransactionEntity[]>>(
+    _persistedForecastMap,
+  );
 
   useEffect(() => {
     const prevMap = prevMapRef.current;
     const newMap = forecastTransactionsByCategoryAndMonth;
     prevMapRef.current = newMap;
+    _persistedForecastMap = newMap;
 
     const categoryAmounts: Array<{
       categoryId: string;

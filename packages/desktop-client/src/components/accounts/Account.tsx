@@ -98,6 +98,7 @@ type AllTransactionsProps = {
   transactions: TransactionEntity[];
   balances: Record<TransactionEntity['id'], IntegerAmount> | null;
   showBalances?: boolean | undefined;
+  showUpcoming?: boolean | undefined;
   filtered?: boolean | undefined;
   scheduleIds?: string[] | undefined;
   children: (
@@ -111,6 +112,7 @@ function AllTransactions({
   transactions,
   balances,
   showBalances,
+  showUpcoming = true,
   filtered,
   scheduleIds,
   children,
@@ -151,6 +153,7 @@ function AllTransactions({
   }, [showBalances, balances, transactions]);
 
   const relevantPreviewTransactions = useMemo(() => {
+    if (!showUpcoming) return [];
     if (filtered) {
       if (scheduleIdSet.size === 0) return [];
       return previewTransactions.filter(
@@ -158,7 +161,7 @@ function AllTransactions({
       );
     }
     return previewTransactions;
-  }, [filtered, scheduleIdSet, previewTransactions]);
+  }, [showUpcoming, filtered, scheduleIdSet, previewTransactions]);
 
   const prependBalances = useMemo(() => {
     if (!showBalances) {
@@ -225,6 +228,8 @@ type AccountInternalProps = {
   filterConditions: RuleConditionEntity[];
   showBalances?: boolean;
   setShowBalances: (newValue: boolean) => void;
+  showUpcoming?: boolean;
+  setShowUpcoming: (newValue: boolean) => void;
   showNetWorthChart: boolean;
   setShowNetWorthChart: (newValue: boolean) => void;
   showCleared?: boolean;
@@ -789,6 +794,7 @@ class AccountInternal extends PureComponent<
       | 'reopen'
       | 'export'
       | 'toggle-balance'
+      | 'toggle-upcoming'
       | 'remove-sorting'
       | 'toggle-cleared'
       | 'toggle-reconciled'
@@ -900,6 +906,9 @@ class AccountInternal extends PureComponent<
         } else {
           this.props.setShowNetWorthChart(true);
         }
+        break;
+      case 'toggle-upcoming':
+        this.props.setShowUpcoming(!(this.props.showUpcoming ?? true));
         break;
       default:
     }
@@ -1778,6 +1787,7 @@ class AccountInternal extends PureComponent<
         transactions={transactions}
         balances={balances}
         showBalances={showBalances}
+        showUpcoming={this.props.showUpcoming ?? true}
         filtered={transactionsFiltered}
         scheduleIds={this.props.location?.state?.scheduleIds}
       >
@@ -1804,6 +1814,7 @@ class AccountInternal extends PureComponent<
                 accounts={accounts}
                 transactions={transactions}
                 showBalances={showBalances ?? false}
+                showUpcoming={this.props.showUpcoming ?? true}
                 showExtraBalances={showExtraBalances ?? false}
                 showCleared={showCleared ?? false}
                 showReconciled={showReconciled ?? false}
@@ -2011,6 +2022,9 @@ export function Account() {
   const [hideReconciled, setHideReconciled] = useSyncedPref(
     `hide-reconciled-${params.id}`,
   );
+  const [hideUpcoming, setHideUpcoming] = useSyncedPref(
+    `hide-upcoming-${params.id}`,
+  );
   const [showExtraBalances, setShowExtraBalances] = useSyncedPref(
     `show-extra-balances-${params.id || 'all-accounts'}`,
   );
@@ -2066,6 +2080,8 @@ export function Account() {
           setShowCleared={val => setHideCleared(String(!val))}
           showReconciled={String(hideReconciled) !== 'true'}
           setShowReconciled={val => setHideReconciled(String(!val))}
+          showUpcoming={String(hideUpcoming) !== 'true'}
+          setShowUpcoming={val => setHideUpcoming(String(!val))}
           showExtraBalances={String(showExtraBalances) === 'true'}
           setShowExtraBalances={extraBalances =>
             setShowExtraBalances(String(extraBalances))
