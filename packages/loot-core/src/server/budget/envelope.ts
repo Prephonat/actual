@@ -1,4 +1,5 @@
 import * as db from '#server/db';
+import * as prefs from '#server/prefs';
 import * as sheet from '#server/sheet';
 import { resolveName } from '#server/spreadsheet/util';
 // @ts-strict-ignore
@@ -31,6 +32,9 @@ function createBlankMonth(categories, sheetName, months) {
 }
 
 export function createCategory(cat, sheetName, prevSheetName) {
+  // Create planned cell for all categories (both income and expense)
+  sheet.get().createStatic(sheetName, `planned-${cat.id}`, 0);
+
   if (!cat.is_income) {
     sheet.get().createStatic(sheetName, `budget-${cat.id}`, 0);
 
@@ -44,19 +48,40 @@ export function createCategory(cat, sheetName, prevSheetName) {
     }
 
     sheet.get().createStatic(sheetName, `carryover-${cat.id}`, false);
+    sheet.get().createStatic(sheetName, `scheduled-upcoming-${cat.id}`, 0);
+    // Always reset to 0 on load; the frontend sets the real value after init.
+    // Without this, stale values from a previous session can persist because
+    // createStatic is a no-op when the cell already exists.
+    sheet.get().set(`${sheetName}!scheduled-upcoming-${cat.id}`, 0);
 
     sheet.get().createDynamic(sheetName, `leftover-${cat.id}`, {
       initialValue: 0,
       dependencies: [
         `budget-${cat.id}`,
         `sum-amount-${cat.id}`,
+        `planned-${cat.id}`,
+        `scheduled-upcoming-${cat.id}`,
         `${prevSheetName}!carryover-${cat.id}`,
         `${prevSheetName}!leftover-${cat.id}`,
         `${prevSheetName}!leftover-pos-${cat.id}`,
       ],
-      run: (budgeted, spent, prevCarryover, prevLeftover, prevLeftoverPos) => {
+      run: (
+        budgeted,
+        spent,
+        planned,
+        scheduledUpcoming,
+        prevCarryover,
+        prevLeftover,
+        prevLeftoverPos,
+      ) => {
+        const forecastMode = prefs.getPrefs()?.['budget.forecastMode'];
+        const plannedAmount = forecastMode ? number(planned) : 0;
+        const scheduledAmount = forecastMode ? number(scheduledUpcoming) : 0;
+
         return safeNumber(
           number(budgeted) +
+            plannedAmount +
+            scheduledAmount +
             number(spent) +
             (prevCarryover ? number(prevLeftover) : number(prevLeftoverPos)),
         );
@@ -77,6 +102,12 @@ export function createCategoryGroup(group, sheetName) {
   sheet.get().createDynamic(sheetName, 'group-sum-amount-' + group.id, {
     initialValue: 0,
     dependencies: group.categories.map(cat => `sum-amount-${cat.id}`),
+    run: sumAmounts,
+  });
+
+  sheet.get().createDynamic(sheetName, 'group-planned-' + group.id, {
+    initialValue: 0,
+    dependencies: group.categories.map(cat => `planned-${cat.id}`),
     run: sumAmounts,
   });
 
@@ -119,11 +150,51 @@ export function createSummary(groups, categories, prevSheetName, sheetName) {
     run: amount => amount,
   });
 
+  // Sum of all planned amounts for expense category groups
+  sheet.get().createDynamic(sheetName, 'total-planned', {
+    initialValue: 0,
+    dependencies: groups
+      .filter(group => !group.is_income)
+      .map(group => `group-planned-${group.id}`),
+    run: sumAmounts,
+  });
+
+  // Alias the income group planned total to `total-income-planned`
+  sheet.get().createDynamic(sheetName, 'total-income-planned', {
+    initialValue: 0,
+    dependencies: [`group-planned-${incomeGroup.id}`],
+    run: amount => amount,
+  });
+
+  // Combined total of all planned amounts (expenses + income)
+  sheet.get().createDynamic(sheetName, 'total-all-planned', {
+    initialValue: 0,
+    dependencies: ['total-planned', 'total-income-planned'],
+    run: (expensePlanned, incomePlanned) =>
+      safeNumber(number(expensePlanned) + number(incomePlanned)),
+  });
+
+  sheet.get().createStatic(sheetName, 'total-income-scheduled', 0);
+
   sheet.get().createDynamic(sheetName, 'available-funds', {
     initialValue: 0,
-    dependencies: ['total-income', 'from-last-month'],
-    run: (income, fromLastMonth) =>
-      safeNumber(number(income) + number(fromLastMonth)),
+    dependencies: [
+      'total-income',
+      'total-income-planned',
+      'total-income-scheduled',
+      'from-last-month',
+    ],
+    run: (income, incomePlanned, incomeScheduled, fromLastMonth) => {
+      const forecastMode = prefs.getPrefs()?.['budget.forecastMode'];
+      const plannedIncome = forecastMode ? number(incomePlanned) : 0;
+      const scheduledIncome = forecastMode ? number(incomeScheduled) : 0;
+      return safeNumber(
+        number(income) +
+          plannedIncome +
+          scheduledIncome +
+          number(fromLastMonth),
+      );
+    },
   });
 
   sheet.get().createDynamic(sheetName, 'last-month-overspent', {
@@ -254,6 +325,11 @@ export function handleCategoryChange(months, oldValue, newValue) {
       .addDependencies(sheetName, `group-leftover-${groupId}`, [
         `leftover-${catId}`,
       ]);
+    sheet
+      .get()
+      .addDependencies(sheetName, `group-planned-${groupId}`, [
+        `planned-${catId}`,
+      ]);
   }
 
   function removeDeps(sheetName, groupId, catId) {
@@ -271,6 +347,11 @@ export function handleCategoryChange(months, oldValue, newValue) {
       .get()
       .removeDependencies(sheetName, `group-leftover-${groupId}`, [
         `leftover-${catId}`,
+      ]);
+    sheet
+      .get()
+      .removeDependencies(sheetName, `group-planned-${groupId}`, [
+        `planned-${catId}`,
       ]);
   }
 
@@ -349,6 +430,11 @@ export function handleCategoryGroupChange(months, oldValue, newValue) {
       .addDependencies(sheetName, 'total-leftover', [
         `group-leftover-${groupId}`,
       ]);
+    sheet
+      .get()
+      .addDependencies(sheetName, 'total-planned', [
+        `group-planned-${groupId}`,
+      ]);
   }
 
   function removeDeps(sheetName, groupId) {
@@ -366,6 +452,11 @@ export function handleCategoryGroupChange(months, oldValue, newValue) {
       .get()
       .removeDependencies(sheetName, 'total-leftover', [
         `group-leftover-${groupId}`,
+      ]);
+    sheet
+      .get()
+      .removeDependencies(sheetName, 'total-planned', [
+        `group-planned-${groupId}`,
       ]);
   }
 

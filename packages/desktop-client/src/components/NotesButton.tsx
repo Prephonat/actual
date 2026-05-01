@@ -21,6 +21,7 @@ type NotesButtonProps = {
   width?: number;
   height?: number;
   defaultColor?: string;
+  hasNotesColor?: string;
   tooltipPosition?: ComponentProps<typeof Tooltip>['placement'];
   showPlaceholder?: boolean;
   style?: CSSProperties;
@@ -30,6 +31,7 @@ export function NotesButton({
   width = 12,
   height = 12,
   defaultColor = theme.buttonNormalText,
+  hasNotesColor,
   tooltipPosition = 'bottom start',
   showPlaceholder = false,
   style,
@@ -72,14 +74,24 @@ export function NotesButton({
           aria-label={t('View notes')}
           className={cx(
             css({
-              color: defaultColor,
+              color:
+                hasNotesColor && hasNotes ? hasNotesColor : defaultColor,
               ...style,
               padding: 4,
               ...(showPlaceholder && {
                 opacity: hasNotes || isOpen ? 1 : 0.3,
               }),
-              ...(isOpen && { color: theme.buttonNormalText }),
-              '&:hover': { opacity: 1 },
+              // When popover is open, keep hasNotesColor if set; otherwise use
+              // the default open color so the icon is clearly active.
+              ...(isOpen && {
+                color: hasNotesColor && hasNotes ? hasNotesColor : theme.buttonNormalText,
+              }),
+              // Override the Button component's [data-hovered] color so the
+              // yellow note indicator is not washed out on mouse-over.
+              '&[data-hovered]': {
+                opacity: 1,
+                ...(hasNotesColor && hasNotes ? { color: hasNotesColor } : {}),
+              },
             }),
             !hasNotes && !isOpen && !showPlaceholder ? 'hover-visible' : '',
           )}

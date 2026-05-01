@@ -1,4 +1,4 @@
-import React, { memo, useRef } from 'react';
+import React, { memo, useRef, useState } from 'react';
 import type { ComponentProps, CSSProperties } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 
@@ -14,10 +14,15 @@ import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import * as monthUtils from '@actual-app/core/shared/months';
-import { css } from '@emotion/css';
+import { css, cx } from '@emotion/css';
 
+import type { CategoryGroupMonthProps, CategoryMonthProps } from '#components';
 import { BalanceWithCarryover } from '#components/budget/BalanceWithCarryover';
-import { makeAmountGrey } from '#components/budget/util';
+import {
+  makeAmountGrey,
+  makePlannedGroupStyle,
+  makePlannedStyle,
+} from '#components/budget/util';
 import { NotesButton } from '#components/NotesButton';
 import { CellValue, CellValueText } from '#components/spreadsheet/CellValue';
 import { Field, Row, SheetCell } from '#components/table';
@@ -25,17 +30,19 @@ import type { SheetCellProps } from '#components/table';
 import { useCategoryScheduleGoalTemplateIndicator } from '#hooks/useCategoryScheduleGoalTemplateIndicator';
 import { useContextMenu } from '#hooks/useContextMenu';
 import { useFormat } from '#hooks/useFormat';
+import { useMetadataPref } from '#hooks/useMetadataPref';
 import { useNavigate } from '#hooks/useNavigate';
-import { useSheetName } from '#hooks/useSheetName';
+import { useCurrentSheetName, useSheetName } from '#hooks/useSheetName';
 import { useSheetValue } from '#hooks/useSheetValue';
 import { useUndo } from '#hooks/useUndo';
 import type { Binding, SheetFields } from '#spreadsheet';
 import { envelopeBudget } from '#spreadsheet/bindings';
-import type { CategoryGroupMonthProps, CategoryMonthProps } from '..';
 
 import { BalanceMovementMenu } from './BalanceMovementMenu';
 import { BudgetMenu } from './BudgetMenu';
+import { useEnvelopeBudget } from './EnvelopeBudgetContext';
 import { IncomeMenu } from './IncomeMenu';
+import { ScheduledTransactionsPopover } from './ScheduledTransactionsPopover';
 
 export function useEnvelopeSheetName<
   FieldName extends SheetFields<'envelope-budget'>,
@@ -75,6 +82,20 @@ const cellStyle: CSSProperties = {
 };
 
 export const BudgetTotalsMonth = memo(function BudgetTotalsMonth() {
+  const [forecastMode = false] = useMetadataPref('budget.forecastMode');
+  const { scheduledExpenseByMonth } = useEnvelopeBudget();
+
+  // Derive the month string ("YYYY-MM") from the enclosing SheetNameProvider
+  // (e.g. "budget202501" → "2025-01") so we can look up per-month totals.
+  const sheetName = useCurrentSheetName() ?? '';
+  const month =
+    sheetName.startsWith('budget') && sheetName.length === 12
+      ? `${sheetName.slice(6, 10)}-${sheetName.slice(10)}`
+      : '';
+  const scheduledExpenseTotal = month
+    ? (scheduledExpenseByMonth.get(month) ?? 0)
+    : 0;
+
   return (
     <View
       style={{
@@ -99,12 +120,42 @@ export const BudgetTotalsMonth = memo(function BudgetTotalsMonth() {
           )}
         </EnvelopeCellValue>
       </View>
+      {forecastMode && (
+        <View style={headerLabelStyle}>
+          <Text style={{ color: theme.tableHeaderText }}>
+            <Trans>Planned</Trans>
+          </Text>
+          <EnvelopeCellValue
+            binding={envelopeBudget.totalPlanned}
+            type="financial"
+          >
+            {props => <CellValueText {...props} style={cellStyle} />}
+          </EnvelopeCellValue>
+        </View>
+      )}
       <View style={headerLabelStyle}>
         <Text style={{ color: theme.tableHeaderText }}>
           <Trans>Spent</Trans>
         </Text>
         <EnvelopeCellValue binding={envelopeBudget.totalSpent} type="financial">
-          {props => <CellValueText {...props} style={cellStyle} />}
+          {props => {
+            const displayValue =
+              forecastMode && scheduledExpenseTotal !== 0
+                ? props.value + scheduledExpenseTotal
+                : props.value;
+            return (
+              <CellValueText
+                {...props}
+                value={displayValue}
+                style={{
+                  ...cellStyle,
+                  ...(forecastMode && scheduledExpenseTotal !== 0
+                    ? { color: theme.upcomingText }
+                    : {}),
+                }}
+              />
+            );
+          }}
         </EnvelopeCellValue>
       </View>
       <View style={headerLabelStyle}>
@@ -123,6 +174,8 @@ export const BudgetTotalsMonth = memo(function BudgetTotalsMonth() {
 });
 
 export function IncomeHeaderMonth() {
+  const [forecastMode = false] = useMetadataPref('budget.forecastMode');
+
   return (
     <Row
       style={{
@@ -132,6 +185,11 @@ export function IncomeHeaderMonth() {
         backgroundColor: theme.budgetCurrentMonth,
       }}
     >
+      {forecastMode && (
+        <View style={{ flex: 1, textAlign: 'right' }}>
+          <Trans>Planned</Trans>
+        </View>
+      )}
       <View style={{ flex: 1, textAlign: 'right' }}>
         <Trans>Received</Trans>
       </View>
@@ -144,6 +202,14 @@ export const ExpenseGroupMonth = memo(function ExpenseGroupMonth({
   group,
 }: CategoryGroupMonthProps) {
   const { id } = group;
+  const [forecastMode = false] = useMetadataPref('budget.forecastMode');
+  const { forecastTransactionsByCategoryAndMonth } = useEnvelopeBudget();
+
+  const groupScheduledAmount = (group.categories ?? []).reduce((sum, cat) => {
+    const txs =
+      forecastTransactionsByCategoryAndMonth.get(`${cat.id}-${month}`) ?? [];
+    return sum + txs.reduce((s, tx) => s + (tx.amount ?? 0), 0);
+  }, 0);
 
   return (
     <View
@@ -165,16 +231,50 @@ export const ExpenseGroupMonth = memo(function ExpenseGroupMonth({
           type: 'financial',
         }}
       />
-      <EnvelopeSheetCell
-        name="spent"
-        width="flex"
-        textAlign="right"
-        style={{ fontWeight: 600, ...styles.tnum }}
-        valueProps={{
-          binding: envelopeBudget.groupSumAmount(id),
-          type: 'financial',
-        }}
-      />
+      {forecastMode && (
+        <EnvelopeSheetCell
+          name="planned"
+          width="flex"
+          textAlign="right"
+          style={{ fontWeight: 600, ...styles.tnum }}
+          valueProps={{
+            binding: envelopeBudget.groupPlanned(id),
+            type: 'financial',
+            getValueStyle: makePlannedGroupStyle,
+          }}
+        />
+      )}
+      {forecastMode && groupScheduledAmount !== 0 ? (
+        <Field
+          name="spent"
+          width="flex"
+          style={{ textAlign: 'right', fontWeight: 600, ...styles.tnum }}
+        >
+          <EnvelopeCellValue
+            binding={envelopeBudget.groupSumAmount(id)}
+            type="financial"
+          >
+            {props => (
+              <CellValueText
+                {...props}
+                value={props.value + groupScheduledAmount}
+                style={{ color: theme.upcomingText }}
+              />
+            )}
+          </EnvelopeCellValue>
+        </Field>
+      ) : (
+        <EnvelopeSheetCell
+          name="spent"
+          width="flex"
+          textAlign="right"
+          style={{ fontWeight: 600, ...styles.tnum }}
+          valueProps={{
+            binding: envelopeBudget.groupSumAmount(id),
+            type: 'financial',
+          }}
+        />
+      )}
       <EnvelopeSheetCell
         name="balance"
         width="flex"
@@ -203,7 +303,19 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
 }: CategoryMonthProps) {
   const { t } = useTranslation();
   const format = useFormat();
+  const [forecastMode = false] = useMetadataPref('budget.forecastMode');
+  const [editingPlanned, setEditingPlanned] = useState(false);
+  const [scheduledPopoverOpen, setScheduledPopoverOpen] = useState(false);
 
+  const { forecastTransactionsByCategoryAndMonth } = useEnvelopeBudget();
+  const scheduledTransactions =
+    forecastTransactionsByCategoryAndMonth.get(`${category.id}-${month}`) ?? [];
+  const scheduledAmount = scheduledTransactions.reduce(
+    (sum, tx) => sum + (tx.amount ?? 0),
+    0,
+  );
+
+  const spentTriggerRef = useRef(null);
   const budgetMenuTriggerRef = useRef(null);
   const balanceMenuTriggerRef = useRef(null);
   const {
@@ -291,6 +403,7 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
               <NotesButton
                 id={`${category.id}-${month}`}
                 defaultColor={theme.pageTextLight}
+                hasNotesColor="#ffd93d"
               />
             </View>
             <View
@@ -377,7 +490,10 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
           exposed={editing}
           focused={editing}
           width="flex"
-          onExpose={() => onEdit(category.id, month)}
+          onExpose={() => {
+            setEditingPlanned(false); // Close planned cell if open
+            onEdit(category.id, month);
+          }}
           style={{ ...(editing && { zIndex: 100 }), ...styles.tnum }}
           textAlign="right"
           valueStyle={{
@@ -413,10 +529,58 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
           }}
         />
       </View>
+      {forecastMode && (
+        <EnvelopeSheetCell
+          name="planned"
+          exposed={editingPlanned}
+          focused={editingPlanned}
+          width="flex"
+          onExpose={() => {
+            onEdit(null); // Close budgeted cell if open
+            setEditingPlanned(true);
+          }}
+          textAlign="right"
+          style={{ ...(editingPlanned && { zIndex: 100 }), ...styles.tnum }}
+          valueStyle={{
+            cursor: 'default',
+            margin: 1,
+            padding: '0 4px',
+            borderRadius: 4,
+            ':hover': {
+              boxShadow: 'inset 0 0 0 1px ' + theme.pageTextSubdued,
+              backgroundColor: theme.budgetCurrentMonth,
+            },
+          }}
+          valueProps={{
+            binding: envelopeBudget.catPlanned(category.id),
+            type: 'financial',
+            getValueStyle: makePlannedStyle,
+            formatExpr: format.forEdit,
+            unformatExpr: format.fromEdit,
+          }}
+          inputProps={{
+            onBlur: () => {
+              setEditingPlanned(false);
+            },
+            style: {
+              backgroundColor: theme.budgetCurrentMonth,
+            },
+          }}
+          onSave={(parsedIntegerAmount: number | null) => {
+            onBudgetAction(month, 'planned-amount', {
+              category: category.id,
+              amount: parsedIntegerAmount ?? 0,
+            });
+          }}
+        />
+      )}
       <Field name="spent" width="flex" style={{ textAlign: 'right' }}>
         <View
+          ref={spentTriggerRef}
           data-testid="category-month-spent"
-          onClick={() => onShowActivity(category.id, month)}
+          onClick={() => {
+            setScheduledPopoverOpen(true);
+          }}
           style={{
             flexDirection: 'row',
             alignItems: 'center',
@@ -456,18 +620,46 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
             binding={envelopeBudget.catSumAmount(category.id)}
             type="financial"
           >
-            {props => (
-              <CellValueText
-                {...props}
-                className={css({
-                  cursor: 'pointer',
-                  ':hover': { textDecoration: 'underline' },
-                  ...makeAmountGrey(props.value),
-                })}
-              />
-            )}
+            {props => {
+              const displayValue =
+                forecastMode && scheduledAmount !== 0
+                  ? props.value + scheduledAmount
+                  : props.value;
+              return (
+                <CellValueText
+                  {...props}
+                  value={displayValue}
+                  className={css({
+                    cursor: 'pointer',
+                    ':hover': { textDecoration: 'underline' },
+                    ...makeAmountGrey(displayValue),
+                    ...(forecastMode && scheduledTransactions.length > 0
+                      ? { color: theme.upcomingText }
+                      : {}),
+                  })}
+                />
+              );
+            }}
           </EnvelopeCellValue>
         </View>
+        {scheduledPopoverOpen && (
+          <ScheduledTransactionsPopover
+            triggerRef={spentTriggerRef}
+            isOpen={scheduledPopoverOpen}
+            onClose={() => setScheduledPopoverOpen(false)}
+            upcomingTransactions={scheduledTransactions}
+            categoryId={category.id}
+            month={month}
+            forecastMode={forecastMode}
+            onViewTransactions={() => {
+              setScheduledPopoverOpen(false);
+              const scheduleIds = scheduledTransactions
+                .map(tx => tx.schedule)
+                .filter((s): s is string => Boolean(s));
+              onShowActivity(category.id, month, scheduleIds);
+            }}
+          />
+        )}
       </Field>
       <Field
         ref={balanceMenuTriggerRef}
@@ -503,6 +695,8 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
             goal={envelopeBudget.catGoal(category.id)}
             budgeted={envelopeBudget.catBudgeted(category.id)}
             longGoal={envelopeBudget.catLongGoal(category.id)}
+            planned={envelopeBudget.catPlanned(category.id)}
+            forecastMode={forecastMode}
             tooltipDisabled={balanceMenuOpen}
           />
         </Button>
@@ -528,29 +722,86 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
   );
 });
 
-type IncomeGroupMonthProps = {
-  month: string;
-};
-export function IncomeGroupMonth({ month }: IncomeGroupMonthProps) {
+export function IncomeGroupMonth({ month, group }: CategoryGroupMonthProps) {
+  const [forecastMode = false] = useMetadataPref('budget.forecastMode');
+  const { forecastTransactionsByCategoryAndMonth } = useEnvelopeBudget();
+
+  const groupScheduledIncomeAmount = (group.categories ?? []).reduce(
+    (sum, cat) => {
+      const txs =
+        forecastTransactionsByCategoryAndMonth.get(`${cat.id}-${month}`) ?? [];
+      return sum + txs.reduce((s, tx) => s + (tx.amount ?? 0), 0);
+    },
+    0,
+  );
+
   return (
-    <View style={{ flex: 1 }}>
-      <EnvelopeSheetCell
-        name="received"
-        width="flex"
-        textAlign="right"
-        style={{
-          fontWeight: 600,
-          paddingRight: styles.monthRightPadding,
-          ...styles.tnum,
-          backgroundColor: monthUtils.isCurrentMonth(month)
-            ? theme.budgetHeaderCurrentMonth
-            : theme.budgetHeaderOtherMonth,
-        }}
-        valueProps={{
-          binding: envelopeBudget.groupIncomeReceived,
-          type: 'financial',
-        }}
-      />
+    <View style={{ flex: 1, flexDirection: 'row' }}>
+      {forecastMode && (
+        <EnvelopeSheetCell
+          name="planned"
+          width="flex"
+          textAlign="right"
+          style={{
+            fontWeight: 600,
+            ...styles.tnum,
+            backgroundColor: monthUtils.isCurrentMonth(month)
+              ? theme.budgetHeaderCurrentMonth
+              : theme.budgetHeaderOtherMonth,
+          }}
+          valueProps={{
+            binding: envelopeBudget.totalIncomePlanned,
+            type: 'financial',
+            getValueStyle: makePlannedGroupStyle,
+          }}
+        />
+      )}
+      {forecastMode && groupScheduledIncomeAmount !== 0 ? (
+        <Field
+          name="received"
+          width="flex"
+          style={{
+            textAlign: 'right',
+            fontWeight: 600,
+            paddingRight: styles.monthRightPadding,
+            ...styles.tnum,
+            backgroundColor: monthUtils.isCurrentMonth(month)
+              ? theme.budgetHeaderCurrentMonth
+              : theme.budgetHeaderOtherMonth,
+          }}
+        >
+          <EnvelopeCellValue
+            binding={envelopeBudget.groupIncomeReceived}
+            type="financial"
+          >
+            {props => (
+              <CellValueText
+                {...props}
+                value={props.value + groupScheduledIncomeAmount}
+                style={{ color: theme.upcomingText }}
+              />
+            )}
+          </EnvelopeCellValue>
+        </Field>
+      ) : (
+        <EnvelopeSheetCell
+          name="received"
+          width="flex"
+          textAlign="right"
+          style={{
+            fontWeight: 600,
+            paddingRight: styles.monthRightPadding,
+            ...styles.tnum,
+            backgroundColor: monthUtils.isCurrentMonth(month)
+              ? theme.budgetHeaderCurrentMonth
+              : theme.budgetHeaderOtherMonth,
+          }}
+          valueProps={{
+            binding: envelopeBudget.groupIncomeReceived,
+            type: 'financial',
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -559,10 +810,24 @@ export function IncomeCategoryMonth({
   category,
   isLast,
   month,
+  editing,
+  onEdit,
   onShowActivity,
   onBudgetAction,
 }: CategoryMonthProps) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const [forecastMode = false] = useMetadataPref('budget.forecastMode');
   const incomeMenuTriggerRef = useRef(null);
+  const incomeTriggerRef = useRef(null);
+  const [incomePopoverOpen, setIncomePopoverOpen] = useState(false);
+  const { forecastTransactionsByCategoryAndMonth } = useEnvelopeBudget();
+  const scheduledIncomeTransactions =
+    forecastTransactionsByCategoryAndMonth.get(`${category.id}-${month}`) ?? [];
+  const scheduledIncomeAmount = scheduledIncomeTransactions.reduce(
+    (sum, tx) => sum + (tx.amount ?? 0),
+    0,
+  );
   const {
     setMenuOpen: setIncomeMenuOpen,
     menuOpen: incomeMenuOpen,
@@ -572,7 +837,56 @@ export function IncomeCategoryMonth({
   } = useContextMenu();
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, flexDirection: 'row' }}>
+      {forecastMode && (
+        <EnvelopeSheetCell
+          name="planned"
+          exposed={editing}
+          focused={editing}
+          width="flex"
+          onExpose={() => onEdit(category.id, month)}
+          textAlign="right"
+          style={{
+            ...(editing && { zIndex: 100 }),
+            ...styles.tnum,
+            ...(isLast && { borderBottomWidth: 0 }),
+            backgroundColor: monthUtils.isCurrentMonth(month)
+              ? theme.budgetCurrentMonth
+              : theme.budgetOtherMonth,
+          }}
+          valueStyle={{
+            cursor: 'default',
+            margin: 1,
+            padding: '0 4px',
+            borderRadius: 4,
+            ':hover': {
+              boxShadow: 'inset 0 0 0 1px ' + theme.pageTextSubdued,
+              backgroundColor: theme.budgetCurrentMonth,
+            },
+          }}
+          valueProps={{
+            binding: envelopeBudget.catPlanned(category.id),
+            type: 'financial',
+            getValueStyle: makePlannedStyle,
+            formatExpr: format.forEdit,
+            unformatExpr: format.fromEdit,
+          }}
+          inputProps={{
+            onBlur: () => {
+              onEdit(null);
+            },
+            style: {
+              backgroundColor: theme.budgetCurrentMonth,
+            },
+          }}
+          onSave={(parsedIntegerAmount: number | null) => {
+            onBudgetAction(month, 'planned-amount', {
+              category: category.id,
+              amount: Math.max(0, parsedIntegerAmount ?? 0),
+            });
+          }}
+        />
+      )}
       <Field
         name="received"
         width="flex"
@@ -596,12 +910,9 @@ export function IncomeCategoryMonth({
             position: 'relative',
           }}
         >
-          <Button
-            variant="bare"
-            onPress={() => {
-              resetIncomePosition(-6, -4);
-              setIncomeMenuOpen(true);
-            }}
+          <View
+            ref={incomeTriggerRef}
+            onClick={() => setIncomePopoverOpen(true)}
             onContextMenu={e => {
               handleIncomeContextMenu(e);
               // We need to calculate differently from the hook due to being aligned to the right
@@ -612,9 +923,8 @@ export function IncomeCategoryMonth({
               );
             }}
             style={{
-              background: 'transparent',
-              padding: 0,
               paddingRight: styles.monthRightPadding,
+              cursor: 'pointer',
             }}
           >
             <BalanceWithCarryover
@@ -623,8 +933,47 @@ export function IncomeCategoryMonth({
               goal={envelopeBudget.catGoal(category.id)}
               budgeted={envelopeBudget.catBudgeted(category.id)}
               longGoal={envelopeBudget.catLongGoal(category.id)}
+              planned={envelopeBudget.catPlanned(category.id)}
+              forecastMode={forecastMode}
+              balanceOffset={forecastMode ? scheduledIncomeAmount : 0}
+            >
+              {({ value, className, type, name }) => (
+                <CellValueText
+                  type={type}
+                  name={name}
+                  value={value}
+                  className={cx(
+                    className,
+                    forecastMode && scheduledIncomeTransactions.length > 0
+                      ? css({ color: theme.upcomingText })
+                      : '',
+                  )}
+                />
+              )}
+            </BalanceWithCarryover>
+          </View>
+          {incomePopoverOpen && (
+            <ScheduledTransactionsPopover
+              triggerRef={incomeTriggerRef}
+              isOpen={incomePopoverOpen}
+              onClose={() => setIncomePopoverOpen(false)}
+              upcomingTransactions={scheduledIncomeTransactions}
+              categoryId={category.id}
+              month={month}
+              forecastMode={forecastMode}
+              labels={{
+                actual: t('Income'),
+                upcoming: t('Upcoming Income'),
+              }}
+              onViewTransactions={() => {
+                setIncomePopoverOpen(false);
+                const scheduleIds = scheduledIncomeTransactions
+                  .map(tx => tx.schedule)
+                  .filter((s): s is string => Boolean(s));
+                onShowActivity(category.id, month, scheduleIds);
+              }}
             />
-          </Button>
+          )}
           <Popover
             triggerRef={incomeMenuTriggerRef}
             placement="bottom end"

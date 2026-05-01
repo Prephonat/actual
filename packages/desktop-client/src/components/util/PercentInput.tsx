@@ -82,8 +82,13 @@ export function PercentInput({
   }
 
   function fireUpdate() {
+    const stripped = value.replace('%', '').trim();
+    // Use parseFloat (locale-independent) rather than evalArithmetic/currencyToAmount
+    // to avoid misinterpreting e.g. "19.523" as 19523 in dot-comma number-format
+    // locales where '.' is the thousands separator.
+    const numericValue = parseFloat(stripped);
     const clampedValue = clampToPercent(
-      evalArithmetic(value.replace('%', ''), 0) ?? 0,
+      isNaN(numericValue) ? (evalArithmetic(stripped, 0) ?? 0) : numericValue,
     );
     onUpdatePercent?.(clampedValue);
     onInputTextChange(String(clampedValue));

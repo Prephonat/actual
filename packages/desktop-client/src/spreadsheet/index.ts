@@ -43,15 +43,20 @@ export type Spreadsheets = {
     'total-income': number;
     'total-spent': number;
     'total-leftover': number;
+    'total-planned': number;
+    'total-income-planned': number;
+    'total-all-planned': number;
     'group-sum-amount': number;
     'group-budget': number;
     'group-leftover': number;
+    'group-planned': number;
     budget: number;
     'sum-amount': number;
     leftover: number;
     carryover: number;
     goal: number;
     'long-goal': number;
+    planned: number;
   };
   'tracking-budget': {
     // Common fields
@@ -75,6 +80,7 @@ export type Spreadsheets = {
     carryover: number;
     goal: number;
     'long-goal': number;
+    planned: number;
   };
   [`balance`]: {
     // Common fields

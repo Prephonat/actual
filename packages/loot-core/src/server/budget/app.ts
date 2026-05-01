@@ -20,6 +20,7 @@ import * as goalNoteActions from './template-notes';
 
 export type BudgetHandlers = {
   'budget/budget-amount': typeof actions.setBudget;
+  'budget/planned-amount': typeof actions.setPlanned;
   'budget/copy-previous-month': typeof actions.copyPreviousMonth;
   'budget/copy-single-month': typeof actions.copySinglePreviousMonth;
   'budget/set-zero': typeof actions.setZero;
@@ -59,11 +60,17 @@ export type BudgetHandlers = {
   'budget/set-category-automations': typeof goalActions.storeTemplates;
   'budget/store-note-templates': typeof goalNoteActions.storeNoteTemplates;
   'budget/render-note-templates': typeof goalNoteActions.unparse;
+  'budget/set-scheduled-amounts': typeof actions.setScheduledAmounts;
 };
 
 export const app = createApp<BudgetHandlers>();
 
 app.method('budget/budget-amount', mutator(undoable(actions.setBudget)));
+app.method('budget/planned-amount', mutator(undoable(actions.setPlanned)));
+app.method(
+  'budget/set-scheduled-amounts',
+  mutator(actions.setScheduledAmounts),
+);
 app.method(
   'budget/copy-previous-month',
   mutator(undoable(actions.copyPreviousMonth)),
@@ -202,6 +209,7 @@ async function envelopeBudgetMonth({ month }: { month: string }) {
 
       for (const cat of categories) {
         values.push(value(`sum-amount-${cat.id}`));
+        values.push(value(`planned-${cat.id}`));
       }
     } else {
       values = values.concat([
@@ -218,6 +226,7 @@ async function envelopeBudgetMonth({ month }: { month: string }) {
           value(`carryover-${cat.id}`),
           value(`goal-${cat.id}`),
           value(`long-goal-${cat.id}`),
+          value(`planned-${cat.id}`),
         ]);
       }
     }
@@ -261,6 +270,7 @@ async function trackingBudgetMonth({ month }: { month: string }) {
         value(`leftover-${cat.id}`),
         value(`goal-${cat.id}`),
         value(`long-goal-${cat.id}`),
+        value(`planned-${cat.id}`),
       ]);
 
       if (!group.is_income) {

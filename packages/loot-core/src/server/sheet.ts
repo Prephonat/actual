@@ -229,6 +229,7 @@ export async function loadUserBudgets(db: typeof DbModule): Promise<void> {
       );
       sheet.set(`${sheetName}!goal-${budget.category}`, budget.goal);
       sheet.set(`${sheetName}!long-goal-${budget.category}`, budget.long_goal);
+      sheet.set(`${sheetName}!planned-${budget.category}`, budget.planned || 0);
     }
   }
 
@@ -277,4 +278,24 @@ export function waitOnSpreadsheet(): Promise<void> {
       resolve(undefined);
     }
   });
+}
+
+export function recalculateForecastDependentCells(): void {
+  if (!globalSheet) {
+    return;
+  }
+
+  // Collect nodes that directly read forecastMode in their _run function:
+  // leftover- cells (but not leftover-pos- which don't read forecastMode)
+  // and available-funds cells.
+  const nodesToRecompute = Array.from(globalSheet.nodes.keys()).filter(
+    nodeName =>
+      /!leftover-(?!pos-)/.test(nodeName) || /!available-funds$/.test(nodeName),
+  );
+
+  globalSheet.startTransaction();
+  for (const nodeName of nodesToRecompute) {
+    globalSheet.recompute(nodeName);
+  }
+  globalSheet.endTransaction();
 }

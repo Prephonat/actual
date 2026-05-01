@@ -91,6 +91,9 @@ type BalanceWithCarryoverProps = Omit<
   goal: Binding<'envelope-budget' | 'tracking-budget', 'goal'>;
   budgeted: Binding<'envelope-budget' | 'tracking-budget', 'budget'>;
   longGoal: Binding<'envelope-budget' | 'tracking-budget', 'long-goal'>;
+  planned?: Binding<'envelope-budget' | 'tracking-budget', 'planned'>;
+  forecastMode?: boolean;
+  balanceOffset?: number;
   isDisabled?: boolean;
   shouldInlineGoalStatus?: boolean;
   CarryoverIndicator?: ComponentType<CarryoverIndicatorProps>;
@@ -103,6 +106,9 @@ export function BalanceWithCarryover({
   goal,
   budgeted,
   longGoal,
+  planned,
+  forecastMode = false,
+  balanceOffset = 0,
   isDisabled,
   shouldInlineGoalStatus,
   CarryoverIndicator: CarryoverIndicatorComponent = CarryoverIndicator,
@@ -116,6 +122,8 @@ export function BalanceWithCarryover({
   const goalValue = useSheetValue(goal);
   const budgetedValue = useSheetValue(budgeted);
   const longGoalValue = useSheetValue(longGoal);
+  const plannedSheetValue = useSheetValue(planned ?? null);
+  const plannedValue = planned ? (plannedSheetValue ?? 0) : 0;
   const isGoalTemplatesEnabled = useFeatureFlag('goalTemplatesEnabled');
   const getBalanceAmountStyle = useCallback(
     (balanceValue: number) =>
@@ -147,8 +155,13 @@ export function BalanceWithCarryover({
           cursor: 'pointer',
         }),
         ':hover': { textDecoration: 'underline' },
+        ...(forecastMode &&
+          plannedValue &&
+          plannedValue !== 0 && {
+            fontStyle: 'italic',
+          }),
       }),
-    [getBalanceAmountStyle, isDisabled],
+    [getBalanceAmountStyle, isDisabled, forecastMode, plannedValue],
   );
   const GoalStatusDisplay = useCallback(
     (balanceValue, type) => {
@@ -244,63 +257,66 @@ export function BalanceWithCarryover({
 
   return (
     <CellValue binding={balance} type="financial" {...props}>
-      {({ type, name, value: balanceValue }) => (
-        <>
-          <Tooltip
-            content={
-              <View style={{ padding: 10 }}>
-                {GoalStatusDisplay(balanceValue, type)}
-              </View>
-            }
-            style={{ ...styles.tooltip, borderRadius: '0px 5px 5px 0px' }}
-            placement="bottom"
-            triggerProps={{
-              delay: 750,
-              isDisabled:
-                !isGoalTemplatesEnabled ||
-                goalValue == null ||
-                isNarrowWidth ||
-                tooltipDisabled,
-            }}
-          >
-            {children ? (
-              children({
-                type,
-                name,
-                value: balanceValue,
-                className: getDefaultClassName(balanceValue),
-              })
-            ) : (
-              <CellValueText
-                type={type}
-                name={name}
-                value={balanceValue}
-                className={getDefaultClassName(balanceValue)}
+      {({ type, name, value: rawBalanceValue }) => {
+        const balanceValue = rawBalanceValue + balanceOffset;
+        return (
+          <>
+            <Tooltip
+              content={
+                <View style={{ padding: 10 }}>
+                  {GoalStatusDisplay(balanceValue, type)}
+                </View>
+              }
+              style={{ ...styles.tooltip, borderRadius: '0px 5px 5px 0px' }}
+              placement="bottom"
+              triggerProps={{
+                delay: 750,
+                isDisabled:
+                  !isGoalTemplatesEnabled ||
+                  goalValue == null ||
+                  isNarrowWidth ||
+                  tooltipDisabled,
+              }}
+            >
+              {children ? (
+                children({
+                  type,
+                  name,
+                  value: balanceValue,
+                  className: getDefaultClassName(balanceValue),
+                })
+              ) : (
+                <CellValueText
+                  type={type}
+                  name={name}
+                  value={balanceValue}
+                  className={getDefaultClassName(balanceValue)}
+                />
+              )}
+            </Tooltip>
+
+            {carryoverValue && (
+              <CarryoverIndicatorComponent
+                style={getBalanceAmountStyle(balanceValue)}
               />
             )}
-          </Tooltip>
-
-          {carryoverValue && (
-            <CarryoverIndicatorComponent
-              style={getBalanceAmountStyle(balanceValue)}
-            />
-          )}
-          {shouldInlineGoalStatus &&
-            isGoalTemplatesEnabled &&
-            goalValue !== null && (
-              <>
-                <View
-                  style={{
-                    borderTop: '1px solid ' + theme.tableBorderSeparator,
-                    width: '160px',
-                    margin: '3px 0px',
-                  }}
-                />
-                <View>{GoalStatusDisplay(balanceValue, type)}</View>
-              </>
-            )}
-        </>
-      )}
+            {shouldInlineGoalStatus &&
+              isGoalTemplatesEnabled &&
+              goalValue !== null && (
+                <>
+                  <View
+                    style={{
+                      borderTop: '1px solid ' + theme.tableBorderSeparator,
+                      width: '160px',
+                      margin: '3px 0px',
+                    }}
+                  />
+                  <View>{GoalStatusDisplay(balanceValue, type)}</View>
+                </>
+              )}
+          </>
+        );
+      }}
     </CellValue>
   );
 }

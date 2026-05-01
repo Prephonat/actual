@@ -167,7 +167,8 @@ export const errorTextDarker = errorTextDark;
 export const errorTextMenu = colorPalette.red200;
 export const errorBorder = colorPalette.red500;
 export const upcomingBackground = colorPalette.purple700;
-export const upcomingText = colorPalette.purple100;
+export const upcomingTextHeader = colorPalette.purple150;
+export const upcomingText = colorPalette.purple200;
 export const upcomingBorder = tableBorder;
 
 export const formLabelText = colorPalette.purple150;
