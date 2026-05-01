@@ -618,8 +618,7 @@ function ActionEditor({
             style={{
               flex: 1,
               minWidth:
-                options.method === 'fixed-percent' ||
-                options.method === 'vat'
+                options.method === 'fixed-percent' || options.method === 'vat'
                   ? 45
                   : 70,
             }}

@@ -1,9 +1,10 @@
 // @ts-strict-ignore
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 
 import { Button } from '@actual-app/components/button';
+import { SvgExpandArrow } from '@actual-app/components/icons/v0';
 import { SvgDotsHorizontalTriple } from '@actual-app/components/icons/v1';
 import { SvgCheck } from '@actual-app/components/icons/v2';
 import { Menu } from '@actual-app/components/menu';
@@ -19,25 +20,57 @@ import type {
   ScheduleStatuses,
   ScheduleStatusType,
 } from '@actual-app/core/shared/schedules';
-import type { ScheduleEntity } from '@actual-app/core/types/models';
+import type {
+  CategoryEntity,
+  RecurConfig,
+  ScheduleEntity,
+} from '@actual-app/core/types/models';
+import type { TFunction } from 'i18next';
 
 import { FinancialText } from '#components/FinancialText';
 import { PrivacyFilter } from '#components/PrivacyFilter';
 import { Cell, Field, Row, Table, TableHeader } from '#components/table';
 import { DisplayId } from '#components/util/DisplayId';
 import { useAccounts } from '#hooks/useAccounts';
+import { useCategories } from '#hooks/useCategories';
 import { useContextMenu } from '#hooks/useContextMenu';
 import { useDateFormat } from '#hooks/useDateFormat';
 import { useFormat } from '#hooks/useFormat';
 import { usePayees } from '#hooks/usePayees';
 
 import { StatusBadge } from './StatusBadge';
+
+export type GroupBy = 'nothing' | 'frequency' | 'category' | 'account';
+
+type GroupHeaderItem = {
+  id: string;
+  type: 'group-header';
+  label: string;
+  totalAmount: number;
+};
+
+type SplitScheduleItem = {
+  id: string;
+  type: 'split';
+  schedule: ScheduleEntity;
+  categoryId: string | null;
+  amount: number;
+};
+
+type CompletedScheduleItem = { id: 'show-completed' };
+type SchedulesTableItem =
+  | ScheduleEntity
+  | CompletedScheduleItem
+  | GroupHeaderItem
+  | SplitScheduleItem;
+
 type SchedulesTableProps = {
   isLoading?: boolean;
   schedules: readonly ScheduleEntity[];
   statuses: ScheduleStatuses;
   filter: string;
   allowCompleted: boolean;
+  groupBy?: GroupBy;
   onSelect: (id: ScheduleEntity['id']) => void;
   style: CSSProperties;
   tableStyle?: CSSProperties;
@@ -55,9 +88,6 @@ type SchedulesTableProps = {
     }
 );
 
-type CompletedScheduleItem = { id: 'show-completed' };
-type SchedulesTableItem = ScheduleEntity | CompletedScheduleItem;
-
 export type ScheduleItemAction =
   | 'post-transaction'
   | 'post-transaction-today'
@@ -67,6 +97,212 @@ export type ScheduleItemAction =
   | 'delete';
 
 export const ROW_HEIGHT = 43;
+
+function getFrequencyGroupInfo(
+  schedule: ScheduleEntity,
+  t: TFunction,
+): { label: string; order: number } {
+  const date = schedule._date;
+  if (!date || typeof date === 'string') {
+    return { label: t('One-time'), order: 100 };
+  }
+  const { frequency, interval = 1 } = date as RecurConfig;
+  switch (frequency) {
+    case 'daily':
+      return interval === 1
+        ? { label: t('Daily'), order: 0 }
+        : { label: t('Every {{n}} days', { n: interval }), order: 0 };
+    case 'weekly':
+      return interval === 1
+        ? { label: t('Weekly'), order: 1 }
+        : { label: t('Every {{n}} weeks', { n: interval }), order: 1 };
+    case 'monthly':
+      if (interval === 1) return { label: t('Monthly'), order: 3 };
+      if (interval === 3) return { label: t('Quarterly'), order: 4 };
+      return {
+        label: t('Every {{n}} months', { n: interval }),
+        order: 5,
+      };
+    case 'yearly':
+      return interval === 1
+        ? { label: t('Yearly'), order: 6 }
+        : { label: t('Every {{n}} years', { n: interval }), order: 7 };
+    default:
+      return { label: t('Other'), order: 99 };
+  }
+}
+
+type ScheduleCategoryInfo = {
+  categoryId: string | null;
+  amount: number;
+  splitIndex: number | null;
+};
+
+function getScheduleCategories(
+  schedule: ScheduleEntity,
+): ScheduleCategoryInfo[] {
+  const actions = schedule._actions as Array<{
+    op: string;
+    field?: string;
+    value?: unknown;
+    options?: {
+      splitIndex?: number;
+      method?: 'fixed-amount' | 'fixed-percent' | 'formula' | 'remainder';
+    };
+  }>;
+
+  const categoryActions = actions.filter(
+    a => a.op === 'set' && a.field === 'category',
+  );
+
+  if (categoryActions.length === 0) {
+    return [
+      {
+        categoryId: null,
+        amount: getScheduledAmount(schedule._amount),
+        splitIndex: null,
+      },
+    ];
+  }
+
+  const splitCategoryActions = categoryActions.filter(
+    a => a.options?.splitIndex !== undefined && a.options.splitIndex > 0,
+  );
+
+  if (splitCategoryActions.length === 0) {
+    return [
+      {
+        categoryId: categoryActions[0].value as string,
+        amount: getScheduledAmount(schedule._amount),
+        splitIndex: null,
+      },
+    ];
+  }
+
+  const totalAmount = getScheduledAmount(schedule._amount);
+  const splitAmountActions = actions.filter(a => a.op === 'set-split-amount');
+
+  const splitAmounts = new Map<number, number>();
+  let remainderIndex: number | null = null;
+  let fixedSum = 0;
+
+  for (const sa of splitAmountActions) {
+    const idx = sa.options?.splitIndex ?? 0;
+    if (idx === 0) continue;
+    if (sa.options?.method === 'fixed-amount' && typeof sa.value === 'number') {
+      splitAmounts.set(idx, sa.value);
+      fixedSum += sa.value;
+    } else if (
+      sa.options?.method === 'fixed-percent' &&
+      typeof sa.value === 'number'
+    ) {
+      const val = Math.round(totalAmount * (sa.value / 100));
+      splitAmounts.set(idx, val);
+      fixedSum += val;
+    } else if (sa.options?.method === 'remainder') {
+      remainderIndex = idx;
+    }
+  }
+
+  if (remainderIndex !== null) {
+    splitAmounts.set(remainderIndex, totalAmount - fixedSum);
+  }
+
+  return splitCategoryActions.map(catAction => {
+    const idx = catAction.options?.splitIndex ?? 0;
+    return {
+      categoryId: catAction.value as string,
+      amount: splitAmounts.get(idx) ?? 0,
+      splitIndex: idx,
+    };
+  });
+}
+
+function GroupHeaderRow({
+  label,
+  totalAmount,
+  groupId,
+  collapsed,
+  onToggle,
+  minimal,
+}: {
+  label: string;
+  totalAmount: number;
+  groupId: string;
+  collapsed: boolean;
+  onToggle: (id: string) => void;
+  minimal?: boolean;
+}) {
+  const format = useFormat();
+
+  const num = totalAmount;
+  const absAmount = format(Math.abs(num || 0), 'financial');
+  const isPositive = num > 0;
+
+  return (
+    <Row
+      height={ROW_HEIGHT}
+      inset={15}
+      onClick={() => onToggle(groupId)}
+      style={{
+        cursor: 'pointer',
+        backgroundColor: theme.budgetHeaderCurrentMonth,
+        color: 'white',
+        ':hover': {
+          backgroundColor: theme.budgetHeaderCurrentMonth,
+          filter: 'brightness(0.9)',
+        },
+      }}
+    >
+      <Field width="flex" name="name">
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <SvgExpandArrow
+            width={8}
+            height={8}
+            style={{
+              marginRight: 8,
+              marginLeft: 5,
+              flexShrink: 0,
+              transition: 'transform .1s',
+              transform: collapsed ? 'rotate(-90deg)' : '',
+              color: 'white',
+            }}
+          />
+          <Text style={{ fontWeight: 600, color: 'white' }}>{label}</Text>
+        </View>
+      </Field>
+      <Field width="flex" name="payee" />
+      <Field width="flex" name="account" />
+      <Field width={110} name="date" />
+      <Field width={120} name="status" />
+      <Cell
+        width={100}
+        plain
+        style={{
+          textAlign: 'right',
+          flexDirection: 'row',
+          alignItems: 'center',
+          padding: '0 5px',
+        }}
+        name="amount"
+      >
+        <FinancialText
+          style={{
+            flex: 1,
+            color: 'white',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <PrivacyFilter>
+            {isPositive ? `+${absAmount}` : `${absAmount}`}
+          </PrivacyFilter>
+        </FinancialText>
+      </Cell>
+      {!minimal && <Field width={80} />}
+      {!minimal && <Field width={40} />}
+    </Row>
+  );
+}
 
 function OverflowMenu({
   schedule,
@@ -198,9 +434,11 @@ function ScheduleRow({
   minimal,
   statuses,
   dateFormat,
+  overrideAmount,
 }: {
   schedule: ScheduleEntity;
   dateFormat: string;
+  overrideAmount?: number;
 } & Pick<
   SchedulesTableProps,
   'onSelect' | 'onAction' | 'minimal' | 'statuses'
@@ -279,7 +517,12 @@ function ScheduleRow({
       <Field width={120} name="status" style={{ alignItems: 'flex-start' }}>
         <StatusBadge status={statuses.get(schedule.id)} />
       </Field>
-      <ScheduleAmountCell amount={schedule._amount} op={schedule._amountOp} />
+      <ScheduleAmountCell
+        amount={
+          overrideAmount !== undefined ? overrideAmount : schedule._amount
+        }
+        op={overrideAmount !== undefined ? 'is' : schedule._amountOp}
+      />
       {!minimal && (
         <Field width={80} style={{ textAlign: 'center' }}>
           {schedule._date &&
@@ -321,6 +564,7 @@ export function SchedulesTable({
   filter,
   minimal,
   allowCompleted,
+  groupBy,
   style,
   onSelect,
   onAction,
@@ -331,9 +575,25 @@ export function SchedulesTable({
 
   const dateFormat = useDateFormat() || 'MM/dd/yyyy';
   const [showCompleted, setShowCompleted] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    new Set(),
+  );
+
+  useEffect(() => {
+    setCollapsedGroups(new Set());
+  }, [groupBy]);
 
   const { data: payees } = usePayees();
   const { data: accounts = [] } = useAccounts();
+  const { data: categoriesData } = useCategories();
+
+  const categoriesById = useMemo(() => {
+    const map = new Map<string, CategoryEntity>();
+    for (const cat of categoriesData?.list ?? []) {
+      map.set(cat.id, cat);
+    }
+    return map;
+  }, [categoriesData]);
 
   const filteredSchedules = useMemo(() => {
     if (!filter) {
@@ -371,21 +631,211 @@ export function SchedulesTable({
   }, [payees, accounts, schedules, filter, statuses, format, dateFormat]);
 
   const items: readonly SchedulesTableItem[] = useMemo(() => {
-    const unCompletedSchedules = filteredSchedules.filter(s => !s.completed);
+    if (!groupBy || groupBy === 'nothing') {
+      const unCompletedSchedules = filteredSchedules.filter(s => !s.completed);
 
-    if (!allowCompleted) {
-      return unCompletedSchedules;
+      if (!allowCompleted) {
+        return unCompletedSchedules;
+      }
+      if (showCompleted) {
+        return filteredSchedules;
+      }
+
+      const hasCompletedSchedule = filteredSchedules.find(s => s.completed);
+
+      if (!hasCompletedSchedule) return unCompletedSchedules;
+
+      return [...unCompletedSchedules, { id: 'show-completed' }];
     }
-    if (showCompleted) {
-      return filteredSchedules;
+
+    const visibleSchedules =
+      allowCompleted && showCompleted
+        ? filteredSchedules
+        : filteredSchedules.filter(s => !s.completed);
+
+    const hasCompletedSchedules =
+      allowCompleted &&
+      !showCompleted &&
+      filteredSchedules.some(s => s.completed);
+
+    if (groupBy === 'frequency') {
+      const groups = new Map<
+        string,
+        { order: number; items: ScheduleEntity[] }
+      >();
+
+      for (const schedule of visibleSchedules) {
+        const { label, order } = getFrequencyGroupInfo(schedule, t);
+        if (!groups.has(label)) {
+          groups.set(label, { order, items: [] });
+        }
+        groups.get(label).items.push(schedule);
+      }
+
+      const sortedGroups = Array.from(groups.entries()).sort(
+        ([, a], [, b]) => a.order - b.order,
+      );
+
+      const result: SchedulesTableItem[] = [];
+      for (const [label, { items: groupItems }] of sortedGroups) {
+        const groupId = `group-freq-${label}`;
+        const totalAmount = groupItems.reduce(
+          (sum, s) => sum + getScheduledAmount(s._amount),
+          0,
+        );
+        result.push({
+          id: groupId,
+          type: 'group-header',
+          label,
+          totalAmount,
+        });
+        if (!collapsedGroups.has(groupId)) {
+          result.push(...groupItems);
+        }
+      }
+
+      if (hasCompletedSchedules) {
+        result.push({ id: 'show-completed' });
+      }
+
+      return result;
     }
 
-    const hasCompletedSchedule = filteredSchedules.find(s => s.completed);
+    if (groupBy === 'category') {
+      const groups = new Map<
+        string,
+        Array<ScheduleEntity | SplitScheduleItem>
+      >();
 
-    if (!hasCompletedSchedule) return unCompletedSchedules;
+      for (const schedule of visibleSchedules) {
+        const cats = getScheduleCategories(schedule);
 
-    return [...unCompletedSchedules, { id: 'show-completed' }];
-  }, [filteredSchedules, showCompleted, allowCompleted]);
+        if (cats.length === 1) {
+          const catKey = cats[0].categoryId ?? 'uncategorized';
+          if (!groups.has(catKey)) groups.set(catKey, []);
+          groups.get(catKey).push(schedule);
+        } else {
+          for (const cat of cats) {
+            const catKey = cat.categoryId ?? 'uncategorized';
+            if (!groups.has(catKey)) groups.set(catKey, []);
+            groups.get(catKey).push({
+              id: `split-${schedule.id}-${cat.splitIndex}`,
+              type: 'split',
+              schedule,
+              categoryId: cat.categoryId,
+              amount: cat.amount,
+            });
+          }
+        }
+      }
+
+      const sortedEntries = Array.from(groups.entries()).sort(
+        ([keyA], [keyB]) => {
+          if (keyA === 'uncategorized') return 1;
+          if (keyB === 'uncategorized') return -1;
+          const nameA = categoriesById.get(keyA)?.name ?? '';
+          const nameB = categoriesById.get(keyB)?.name ?? '';
+          return nameA.localeCompare(nameB);
+        },
+      );
+
+      const result: SchedulesTableItem[] = [];
+      for (const [catKey, scheduleItems] of sortedEntries) {
+        const groupId = `group-cat-${catKey}`;
+        const label =
+          catKey === 'uncategorized'
+            ? t('Uncategorized')
+            : (categoriesById.get(catKey)?.name ?? t('Unknown'));
+        const totalAmount = scheduleItems.reduce((sum, item) => {
+          if ('type' in item && item.type === 'split') {
+            return sum + (item as SplitScheduleItem).amount;
+          }
+          return sum + getScheduledAmount((item as ScheduleEntity)._amount);
+        }, 0);
+        result.push({
+          id: groupId,
+          type: 'group-header',
+          label,
+          totalAmount,
+        });
+        if (!collapsedGroups.has(groupId)) {
+          result.push(...scheduleItems);
+        }
+      }
+
+      if (hasCompletedSchedules) {
+        result.push({ id: 'show-completed' });
+      }
+
+      return result;
+    }
+
+    if (groupBy === 'account') {
+      const groups = new Map<string, ScheduleEntity[]>();
+
+      for (const schedule of visibleSchedules) {
+        const accountKey = schedule._account ?? 'unknown';
+        if (!groups.has(accountKey)) groups.set(accountKey, []);
+        groups.get(accountKey).push(schedule);
+      }
+
+      const sortedEntries = Array.from(groups.entries()).sort(
+        ([keyA], [keyB]) => {
+          if (keyA === 'unknown') return 1;
+          if (keyB === 'unknown') return -1;
+          const nameA = accounts.find(a => a.id === keyA)?.name ?? '';
+          const nameB = accounts.find(a => a.id === keyB)?.name ?? '';
+          return nameA.localeCompare(nameB);
+        },
+      );
+
+      const result: SchedulesTableItem[] = [];
+      for (const [accountKey, groupItems] of sortedEntries) {
+        const groupId = `group-acct-${accountKey}`;
+        const label =
+          accountKey === 'unknown'
+            ? t('Unknown')
+            : (accounts.find(a => a.id === accountKey)?.name ?? t('Unknown'));
+        const totalAmount = groupItems.reduce(
+          (sum, s) => sum + getScheduledAmount(s._amount),
+          0,
+        );
+        result.push({ id: groupId, type: 'group-header', label, totalAmount });
+        if (!collapsedGroups.has(groupId)) {
+          result.push(...groupItems);
+        }
+      }
+
+      if (hasCompletedSchedules) {
+        result.push({ id: 'show-completed' });
+      }
+
+      return result;
+    }
+
+    return filteredSchedules;
+  }, [
+    filteredSchedules,
+    showCompleted,
+    allowCompleted,
+    groupBy,
+    t,
+    categoriesById,
+    accounts,
+    collapsedGroups,
+  ]);
+
+  function toggleGroupCollapse(groupId: string) {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }
 
   function renderItem({ item }: { item: SchedulesTableItem }) {
     if (item.id === 'show-completed') {
@@ -413,6 +863,36 @@ export function SchedulesTable({
         </Row>
       );
     }
+
+    if ('type' in item && item.type === 'group-header') {
+      const headerItem = item as GroupHeaderItem;
+      return (
+        <GroupHeaderRow
+          groupId={headerItem.id}
+          label={headerItem.label}
+          totalAmount={headerItem.totalAmount}
+          collapsed={collapsedGroups.has(headerItem.id)}
+          onToggle={toggleGroupCollapse}
+          minimal={minimal}
+        />
+      );
+    }
+
+    if ('type' in item && item.type === 'split') {
+      const splitItem = item as SplitScheduleItem;
+      return (
+        <ScheduleRow
+          schedule={splitItem.schedule}
+          statuses={statuses}
+          dateFormat={dateFormat}
+          onSelect={onSelect}
+          onAction={onAction}
+          minimal={minimal}
+          overrideAmount={splitItem.amount}
+        />
+      );
+    }
+
     return (
       <ScheduleRow
         schedule={item as ScheduleEntity}

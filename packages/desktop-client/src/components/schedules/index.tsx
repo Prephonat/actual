@@ -2,6 +2,8 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 
 import { Button } from '@actual-app/components/button';
+import { Select } from '@actual-app/components/select';
+import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { send } from '@actual-app/core/platform/client/connection';
@@ -10,18 +12,21 @@ import type { ScheduleEntity } from '@actual-app/core/types/models';
 
 import { Search } from '#components/common/Search';
 import { Page } from '#components/Page';
+import { useLocalPref } from '#hooks/useLocalPref';
 import { useSchedules } from '#hooks/useSchedules';
 import { pushModal } from '#modals/modalsSlice';
 import { useDispatch } from '#redux';
 
 import { SchedulesTable } from './SchedulesTable';
-import type { ScheduleItemAction } from './SchedulesTable';
+import type { GroupBy, ScheduleItemAction } from './SchedulesTable';
 
 export function Schedules() {
   const { t } = useTranslation();
 
   const dispatch = useDispatch();
   const [filter, setFilter] = useState('');
+  const [savedGroupBy, setGroupBy] = useLocalPref('schedules.groupBy');
+  const groupBy = (savedGroupBy as GroupBy | undefined) ?? 'nothing';
 
   const onEdit = useCallback(
     (id: ScheduleEntity['id']) => {
@@ -98,12 +103,27 @@ export function Schedules() {
             flex: 1,
             flexDirection: 'row',
             justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: 12,
           }}
         >
           <Search
             placeholder={t('Filter schedules…')}
             value={filter}
             onChange={setFilter}
+          />
+          <Text style={{ color: theme.pageText, whiteSpace: 'nowrap' }}>
+            <Trans>Group by</Trans>
+          </Text>
+          <Select<GroupBy>
+            value={groupBy}
+            onChange={v => setGroupBy(v)}
+            options={[
+              ['nothing', t('Nothing')],
+              ['account', t('Account')],
+              ['frequency', t('Frequency')],
+              ['category', t('Category')],
+            ]}
           />
         </View>
       </View>
@@ -114,6 +134,7 @@ export function Schedules() {
         filter={filter}
         statuses={statuses}
         allowCompleted
+        groupBy={groupBy}
         onSelect={onEdit}
         onAction={onAction}
         style={{ backgroundColor: theme.tableBackground }}

@@ -74,8 +74,7 @@ export function NotesButton({
           aria-label={t('View notes')}
           className={cx(
             css({
-              color:
-                hasNotesColor && hasNotes ? hasNotesColor : defaultColor,
+              color: hasNotesColor && hasNotes ? hasNotesColor : defaultColor,
               ...style,
               padding: 4,
               ...(showPlaceholder && {
@@ -84,7 +83,10 @@ export function NotesButton({
               // When popover is open, keep hasNotesColor if set; otherwise use
               // the default open color so the icon is clearly active.
               ...(isOpen && {
-                color: hasNotesColor && hasNotes ? hasNotesColor : theme.buttonNormalText,
+                color:
+                  hasNotesColor && hasNotes
+                    ? hasNotesColor
+                    : theme.buttonNormalText,
               }),
               // Override the Button component's [data-hovered] color so the
               // yellow note indicator is not washed out on mouse-over.

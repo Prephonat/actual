@@ -166,10 +166,7 @@ export function ScheduledTransactionsPopover({
                 ? (payeesById?.[tx.payee]?.name ?? undefined)
                 : undefined;
               const displayName =
-                tx.notes ||
-                schedule?.name ||
-                payeeName ||
-                '—';
+                tx.notes || schedule?.name || payeeName || '—';
               const date = monthUtils.format(tx.date, 'MMM d');
               const amountColor =
                 (tx.amount ?? 0) < 0 ? theme.errorText : theme.tableText;

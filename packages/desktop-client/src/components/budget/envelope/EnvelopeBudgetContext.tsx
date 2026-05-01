@@ -90,10 +90,7 @@ export function EnvelopeBudgetProvider({
           );
         }
       } else {
-        const expenseTotal = txs.reduce(
-          (sum, tx) => sum + (tx.amount ?? 0),
-          0,
-        );
+        const expenseTotal = txs.reduce((sum, tx) => sum + (tx.amount ?? 0), 0);
         if (expenseTotal !== 0) {
           categoryAmounts.push({ categoryId, month, amount: expenseTotal });
         }

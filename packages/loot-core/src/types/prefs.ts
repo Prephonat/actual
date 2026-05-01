@@ -88,6 +88,7 @@ export type LocalPrefs = Partial<{
   'budget.startMonth': string;
   'flags.updateNotificationShownForVersion': string;
   'schedules.showCompleted': boolean;
+  'schedules.groupBy': string;
   reportsViewLegend: boolean;
   reportsViewSummary: boolean;
   reportsViewLabel: boolean;
